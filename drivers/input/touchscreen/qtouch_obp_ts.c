@@ -224,11 +224,15 @@ static void clean_i2c(struct qtouch_ts_data *ts)
 	char	clean;
 	int		dCount = 0;
 
+	mutex_lock(&ts->i2c_lock);
+
 	QTOUCH_INFO("%s: Enter...\n",__func__);
 	clean = FALSE;
 	while ( !clean )
 	{
-		ret = qtouch_read(ts, (char *)buf, 1);
+		//ret = qtouch_read(ts, (char *)buf, 1);
+		memset(buf, 0, 1);
+		ret = i2c_master_recv(ts->client, (char *)buf, 1);
 		if ( ret < 1 )
 			clean = TRUE;
 		if ( buf[0] == 0xff )
@@ -236,6 +240,9 @@ static void clean_i2c(struct qtouch_ts_data *ts)
 		dCount++;
 	}
 	QTOUCH_INFO("%s: Exit...\n",__func__);
+
+	mutex_unlock(&ts->i2c_lock);
+
 	return;
 }
 

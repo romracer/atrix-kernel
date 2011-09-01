@@ -23,11 +23,12 @@ config TOUCHSCREEN_XMEGAT
 	  module will be called xmeagat.
 
 config XMEGAT_USE_RESET_TO_RESUME
-	bool
+	bool "Use reset to resume the device"
+	depends on TOUCHSCREEN_XMEGAT
 	default y
 
 config XMEGAT_DO_HARD_RESET
-	bool
+	bool "Perform a hard reset on the device"
 	depends on XMEGAT_USE_RESET_TO_RESUME
 	default y
 
