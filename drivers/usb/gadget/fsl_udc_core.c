@@ -1200,9 +1200,9 @@ static int fsl_vbus_session(struct usb_gadget *gadget, int is_active)
 	VDBG("VBUS %s", is_active ? "on" : "off");
 #if defined(CONFIG_ARCH_TEGRA) || defined(CONFIG_MACH_MOT)
 	if (udc->vbus_active == (is_active != 0)) {
-		printk(KERN_ERR "Rescheduling work for vbus in same state %d.\n",
-		       udc->vbus_active);
-		WARN_ON(1);
+		//printk(KERN_ERR "Rescheduling work for vbus in same state %d.\n",
+		//       udc->vbus_active);
+		//WARN_ON(1);
 		spin_unlock_irqrestore(&udc->lock, flags);
 		return(0);
 	}
@@ -1968,6 +1968,8 @@ static void reset_irq(struct fsl_udc *udc)
 	 * head and TR Queue */
 	reset_queues(udc);
 	udc->usb_state = USB_STATE_DEFAULT;
+
+	(void) fsl_vbus_draw(&udc->gadget, USB_DEFAULT_CURRENT_LIMIT_MA);
 #else
 	if (fsl_readl(&dr_regs->portsc1) & PORTSCX_PORT_RESET) {
 		VDBG("Bus reset");

@@ -25,6 +25,7 @@
 #include <linux/platform_device.h>
 #include <linux/irq.h>
 #include <linux/gpio.h>
+#include <linux/regulator/consumer.h>
 
 #include <mach/usb-hcd.h>
 #include <mach/nvrm_linux.h>
@@ -587,6 +588,19 @@ static int tegra_ehci_probe(struct platform_device *pdev)
 
 	INIT_WORK(&pdata->work, tegra_ehci_busy_hint_work);
 
+	if (pdata->regulator_str != NULL) {
+		struct regulator *vbus_reg = regulator_get(NULL,
+							pdata->regulator_str);
+		if (IS_ERR(vbus_reg)) {
+			pr_err("%s: Unable to acquire %s regulator %ld\n",
+			__func__, pdata->regulator_str, PTR_ERR(vbus_reg));
+		} else {
+			if (regulator_enable(vbus_reg))
+				pr_err("%s regulator was not enabled\n",
+					__func__);
+		}
+	}
+
 	/* Init the tegra USB phy */
 	if (NvDdkUsbPhyOpen(s_hRmGlobal, pdata->instance,
 			    &pdata->hUsbPhy) != NvSuccess) {
@@ -757,7 +771,7 @@ static int tegra_ehci_resume(struct platform_device * pdev)
 		tegra_ehci_power_up(hcd);
 		if (pdata->otg_mode)
 			tegra_ehci_restart(hcd, HC_STATE_RUNNING);
-		else
+		else if (!pdata->fast_wakeup)
 			tegra_ehci_restart(hcd, hcd->state);
 	}
 
