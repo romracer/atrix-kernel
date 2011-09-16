@@ -207,6 +207,20 @@ static DEFINE_SPINLOCK(hierarchy_id_lock);
  */
 static int need_forkexit_callback __read_mostly;
 
+#ifdef CONFIG_PROVE_LOCKING
+int cgroup_lock_is_held(void)
+{
+	return lockdep_is_held(&cgroup_mutex);
+}
+#else /* #ifdef CONFIG_PROVE_LOCKING */
+int cgroup_lock_is_held(void)
+{
+	return mutex_is_locked(&cgroup_mutex);
+}
+#endif /* #else #ifdef CONFIG_PROVE_LOCKING */
+
+EXPORT_SYMBOL_GPL(cgroup_lock_is_held);
+
 /* convenient tests for these bits */
 inline int cgroup_is_removed(const struct cgroup *cgrp)
 {
@@ -750,6 +764,7 @@ void cgroup_lock(void)
 {
 	mutex_lock(&cgroup_mutex);
 }
+EXPORT_SYMBOL_GPL(cgroup_lock);
 
 /**
  * cgroup_unlock - release lock on cgroup changes
@@ -760,6 +775,7 @@ void cgroup_unlock(void)
 {
 	mutex_unlock(&cgroup_mutex);
 }
+EXPORT_SYMBOL_GPL(cgroup_unlock);
 
 /*
  * A couple of forward declarations required, due to cyclic reference loop:
@@ -1605,6 +1621,8 @@ static struct file_system_type cgroup_fs_type = {
 	.kill_sb = cgroup_kill_sb,
 };
 
+static struct kobject *cgroup_kobj;
+
 static inline struct cgroup *__d_cgrp(struct dentry *dentry)
 {
 	return dentry->d_fsdata;
@@ -1628,7 +1646,9 @@ static inline struct cftype *__d_cft(struct dentry *dentry)
 int cgroup_path(const struct cgroup *cgrp, char *buf, int buflen)
 {
 	char *start;
-	struct dentry *dentry = rcu_dereference(cgrp->dentry);
+	struct dentry *dentry = rcu_dereference_check(cgrp->dentry,
+						      rcu_read_lock_held() ||
+						      cgroup_lock_is_held());
 
 	if (!dentry || cgrp == dummytop) {
 		/*
@@ -1644,13 +1664,17 @@ int cgroup_path(const struct cgroup *cgrp, char *buf, int buflen)
 	*--start = '\0';
 	for (;;) {
 		int len = dentry->d_name.len;
+
 		if ((start -= len) < buf)
 			return -ENAMETOOLONG;
-		memcpy(start, cgrp->dentry->d_name.name, len);
+		memcpy(start, dentry->d_name.name, len);
 		cgrp = cgrp->parent;
 		if (!cgrp)
 			break;
-		dentry = rcu_dereference(cgrp->dentry);
+
+		dentry = rcu_dereference_check(cgrp->dentry,
+					       rcu_read_lock_held() ||
+					       cgroup_lock_is_held());
 		if (!cgrp->parent)
 			continue;
 		if (--start < buf)
@@ -1660,6 +1684,7 @@ int cgroup_path(const struct cgroup *cgrp, char *buf, int buflen)
 	memmove(buf, start, buf + buflen - start);
 	return 0;
 }
+EXPORT_SYMBOL_GPL(cgroup_path);
 
 /**
  * cgroup_attach_task - attach task 'tsk' to cgroup 'cgrp'
@@ -1772,6 +1797,30 @@ out:
 	return retval;
 }
 
+/**
+ * cgroup_attach_task_all - attach task 'tsk' to all cgroups of task 'from'
+ * @from: attach to all cgroups of a given task
+ * @tsk: the task to be attached
+ */
+int cgroup_attach_task_all(struct task_struct *from, struct task_struct *tsk)
+{
+	struct cgroupfs_root *root;
+	int retval = 0;
+
+	cgroup_lock();
+	for_each_active_root(root) {
+		struct cgroup *from_cg = task_cgroup_from_root(from, root);
+
+		retval = cgroup_attach_task(from_cg, tsk);
+		if (retval)
+			break;
+	}
+	cgroup_unlock();
+
+	return retval;
+}
+EXPORT_SYMBOL_GPL(cgroup_attach_task_all);
+
 /*
  * Attach task with pid 'pid' to cgroup 'cgrp'. Call with cgroup_mutex
  * held. May take task_lock of task
@@ -1826,6 +1875,7 @@ bool cgroup_lock_live_group(struct cgroup *cgrp)
 	}
 	return true;
 }
+EXPORT_SYMBOL_GPL(cgroup_lock_live_group);
 
 static int cgroup_release_agent_write(struct cgroup *cgrp, struct cftype *cft,
 				      const char *buffer)
@@ -2974,6 +3024,7 @@ static void cgroup_event_remove(struct work_struct *work)
 
 	eventfd_ctx_put(event->eventfd);
 	kfree(event);
+	dput(cgrp->dentry);
 }
 
 /*
@@ -2990,7 +3041,7 @@ static int cgroup_event_wake(wait_queue_t *wait, unsigned mode,
 	unsigned long flags = (unsigned long)key;
 
 	if (flags & POLLHUP) {
-		remove_wait_queue_locked(event->wqh, &event->wait);
+		__remove_wait_queue(event->wqh, &event->wait);
 		spin_lock(&cgrp->event_list_lock);
 		list_del(&event->list);
 		spin_unlock(&cgrp->event_list_lock);
@@ -3093,6 +3144,13 @@ static int cgroup_write_event_control(struct cgroup *cgrp, struct cftype *cft,
 		ret = 0;
 		goto fail;
 	}
+
+	/*
+	 * Events should be removed after rmdir of cgroup directory, but before
+	 * destroying subsystem state objects. Let's take reference to cgroup
+	 * directory dentry to do that.
+	 */
+	dget(cgrp->dentry);
 
 	spin_lock(&cgrp->event_list_lock);
 	list_add(&event->list, &cgrp->event_list);
@@ -3855,9 +3913,18 @@ int __init cgroup_init(void)
 	hhead = css_set_hash(init_css_set.subsys);
 	hlist_add_head(&init_css_set.hlist, hhead);
 	BUG_ON(!init_root_id(&rootnode));
-	err = register_filesystem(&cgroup_fs_type);
-	if (err < 0)
+
+	cgroup_kobj = kobject_create_and_add("cgroup", fs_kobj);
+	if (!cgroup_kobj) {
+		err = -ENOMEM;
 		goto out;
+	}
+
+	err = register_filesystem(&cgroup_fs_type);
+	if (err < 0) {
+		kobject_put(cgroup_kobj);
+		goto out;
+	}
 
 	proc_create("cgroups", 0, NULL, &proc_cgroupstats_operations);
 
@@ -4313,6 +4380,7 @@ void __css_put(struct cgroup_subsys_state *css, int count)
 	rcu_read_unlock();
 	WARN_ON_ONCE(val < 1);
 }
+EXPORT_SYMBOL_GPL(__css_put);
 
 /*
  * Notify userspace when a cgroup is released, by running the
@@ -4428,6 +4496,7 @@ unsigned short css_id(struct cgroup_subsys_state *css)
 		return cssid->id;
 	return 0;
 }
+EXPORT_SYMBOL_GPL(css_id);
 
 unsigned short css_depth(struct cgroup_subsys_state *css)
 {
@@ -4437,6 +4506,7 @@ unsigned short css_depth(struct cgroup_subsys_state *css)
 		return cssid->depth;
 	return 0;
 }
+EXPORT_SYMBOL_GPL(css_depth);
 
 bool css_is_ancestor(struct cgroup_subsys_state *child,
 		    const struct cgroup_subsys_state *root)
@@ -4473,6 +4543,7 @@ void free_css_id(struct cgroup_subsys *ss, struct cgroup_subsys_state *css)
 	spin_unlock(&ss->id_lock);
 	call_rcu(&id->rcu_head, __free_css_id_cb);
 }
+EXPORT_SYMBOL_GPL(free_css_id);
 
 /*
  * This is called by init or create(). Then, calls to this function are
@@ -4589,6 +4660,7 @@ struct cgroup_subsys_state *css_lookup(struct cgroup_subsys *ss, int id)
 
 	return rcu_dereference(cssid->css);
 }
+EXPORT_SYMBOL_GPL(css_lookup);
 
 /**
  * css_get_next - lookup next cgroup under specified hierarchy.

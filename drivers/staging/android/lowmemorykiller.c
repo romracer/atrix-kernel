@@ -69,15 +69,15 @@ static int lowmem_shrink(int nr_to_scan, gfp_t gfp_mask)
 	int selected_oom_adj;
 	int array_size = ARRAY_SIZE(lowmem_adj);
 	int other_free = global_page_state(NR_FREE_PAGES);
-	int other_file = global_page_state(NR_FILE_PAGES);
+	int other_file = global_page_state(NR_FILE_PAGES) -
+						global_page_state(NR_SHMEM);
 
 	if (lowmem_adj_size < array_size)
 		array_size = lowmem_adj_size;
 	if (lowmem_minfree_size < array_size)
 		array_size = lowmem_minfree_size;
 	for (i = 0; i < array_size; i++) {
-		if (other_free < lowmem_minfree[i] &&
-		    other_file < lowmem_minfree[i]) {
+		if (other_file < lowmem_minfree[i]) {
 			min_adj = lowmem_adj[i];
 			break;
 		}

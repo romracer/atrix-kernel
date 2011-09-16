@@ -28,6 +28,7 @@ struct css_id;
 extern int cgroup_init_early(void);
 extern int cgroup_init(void);
 extern void cgroup_lock(void);
+extern int cgroup_lock_is_held(void);
 extern bool cgroup_lock_live_group(struct cgroup *cgrp);
 extern void cgroup_unlock(void);
 extern void cgroup_fork(struct task_struct *p);
@@ -388,9 +389,6 @@ struct cftype {
 	 * closes the eventfd or on cgroup removing.
 	 * This callback must be implemented, if you want provide
 	 * notification functionality.
-	 *
-	 * Be careful. It can be called after destroy(), so you have
-	 * to keep all nesessary data, until all events are removed.
 	 */
 	int (*unregister_event)(struct cgroup *cgrp, struct cftype *cft,
 			struct eventfd_ctx *eventfd);
@@ -523,7 +521,9 @@ static inline struct cgroup_subsys_state *cgroup_subsys_state(
 static inline struct cgroup_subsys_state *task_subsys_state(
 	struct task_struct *task, int subsys_id)
 {
-	return rcu_dereference(task->cgroups->subsys[subsys_id]);
+	return rcu_dereference_check(task->cgroups->subsys[subsys_id],
+				     rcu_read_lock_held() ||
+				     cgroup_lock_is_held());
 }
 
 static inline struct cgroup* task_cgroup(struct task_struct *task,
@@ -562,6 +562,12 @@ struct task_struct *cgroup_iter_next(struct cgroup *cgrp,
 void cgroup_iter_end(struct cgroup *cgrp, struct cgroup_iter *it);
 int cgroup_scan_tasks(struct cgroup_scanner *scan);
 int cgroup_attach_task(struct cgroup *, struct task_struct *);
+int cgroup_attach_task_all(struct task_struct *from, struct task_struct *);
+
+static inline int cgroup_attach_task_current_cg(struct task_struct *tsk)
+{
+	return cgroup_attach_task_all(current, tsk);
+}
 
 /*
  * CSS ID is ID for cgroup_subsys_state structs under subsys. This only works
@@ -616,6 +622,17 @@ static inline int cgroupstats_build(struct cgroupstats *stats,
 					struct dentry *dentry)
 {
 	return -EINVAL;
+}
+
+/* No cgroups - nothing to do */
+static inline int cgroup_attach_task_all(struct task_struct *from,
+					 struct task_struct *t)
+{
+	return 0;
+}
+static inline int cgroup_attach_task_current_cg(struct task_struct *t)
+{
+	return 0;
 }
 
 #endif /* !CONFIG_CGROUPS */

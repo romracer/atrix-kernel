@@ -488,7 +488,6 @@ DvsChangeCpuVoltage(
 /*
  * Enable/Disable voltage scaling
  */
-static void NvRmPrivDvsRun(void);
 static void NvRmPrivDvsStopAtNominal(void);
 
 /*
@@ -1546,9 +1545,9 @@ static NvRmPmRequest DfsThread(NvRmDfs* pDfs)
         if (NeedClockUpdate || pDfs->VoltageScaler.UpdateFlag ||
             pDfs->ThermalThrottler.TcorePolicy.UpdateFlag)
         {
-            NvRmPrivLockSharedPll();
             if (!pDfs->VoltageScaler.StopFlag)
             {
+                NvRmPrivLockSharedPll();
                 // Check temperature and throttle DFS clocks if necessry. Make
                 // sure V/F scaling is running while throttling is in progress.
                 pDfs->VoltageScaler.UpdateFlag =
@@ -1564,8 +1563,8 @@ static NvRmPmRequest DfsThread(NvRmDfs* pDfs)
                 NvOsIntrMutexLock(pDfs->hIntrMutex);
                 pDfs->CurrentKHz = DfsKHz;
                 NvOsIntrMutexUnlock(pDfs->hIntrMutex);
+                NvRmPrivUnlockSharedPll();
             }
-            NvRmPrivUnlockSharedPll();
 
             // Complete synchronous busy hint processing.
             if (pDfs->BusySyncState == NvRmDfsBusySyncState_Execute)
@@ -2539,7 +2538,13 @@ static void NvRmPrivDvsStopAtNominal(void)
         DvsChangeCpuVoltage(pDfs->hRm, pDvs, pDvs->NominalCpuMv);
 }
 
-static void NvRmPrivDvsRun(void)
+void NvRmPrivDvsStop(void)
+{
+    NvRmDvs* pDvs = &s_Dfs.VoltageScaler;
+    pDvs->StopFlag = NV_TRUE;
+}
+
+void NvRmPrivDvsRun(void)
 {
     NvRmDvs* pDvs = &s_Dfs.VoltageScaler;
     pDvs->UpdateFlag = NV_TRUE;

@@ -38,6 +38,7 @@
 #include "nvrm_dma.h"
 #include "nvrm_ioctls.h"
 #include "nvrm_power_private.h"
+#include "nvrm/core/common/nvrm_clocks.h"
 #include "mach/nvrm_linux.h"
 #include "nvos_ioctl.h"
 #include "nvreftrack.h"
@@ -63,6 +64,8 @@ static long nvrm_unlocked_ioctl(struct file *file,
     unsigned int cmd, unsigned long arg);
 static int nvrm_mmap(struct file *file, struct vm_area_struct *vma);
 extern void reset_cpu(unsigned int cpu, unsigned int reset);
+extern void NvRmPrivDvsStop(void);
+extern void NvRmPrivDvsRun(void);
 
 //Variables for AVP suspend operation
 extern NvRmDeviceHandle s_hRmGlobal;
@@ -620,16 +623,21 @@ int tegra_pm_notifier(struct notifier_block *nb,
     // Notify the event to nvrm_daemon.
     switch (event) {
     case PM_SUSPEND_PREPARE:
+        NvRmPrivLockSharedPll();
+        NvRmPrivDvsStop();
+        NvRmPrivUnlockSharedPll();
 #ifndef CONFIG_HAS_EARLYSUSPEND
         notify_daemon(STRING_PM_DISPLAY_OFF);
 #endif
         notify_daemon(STRING_PM_SUSPEND_PREPARE);
+        NvRmPrivDvsStop();
         break;
     case PM_POST_SUSPEND:
         notify_daemon(STRING_PM_POST_SUSPEND);
 #ifndef CONFIG_HAS_EARLYSUSPEND
         notify_daemon(STRING_PM_DISPLAY_ON);
 #endif
+        NvRmPrivDvsRun();
         break;
     default:
         printk(KERN_ERR "%s: unknown event %ld\n", __func__, event);

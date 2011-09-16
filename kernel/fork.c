@@ -85,6 +85,7 @@ int max_threads;		/* tunable limit on nr_threads */
 DEFINE_PER_CPU(unsigned long, process_counts) = 0;
 
 __cacheline_aligned DEFINE_RWLOCK(tasklist_lock);  /* outer */
+EXPORT_SYMBOL_GPL(tasklist_lock);
 
 int nr_processes(void)
 {
@@ -1141,6 +1142,10 @@ static struct task_struct *copy_process(unsigned long clone_flags,
 
 #ifdef CONFIG_DEBUG_MUTEXES
 	p->blocked_on = NULL; /* not blocked yet */
+#endif
+#ifdef CONFIG_CGROUP_MEM_RES_CTLR
+	p->memcg_batch.do_batch = 0;
+	p->memcg_batch.memcg = NULL;
 #endif
 
 	p->bts = NULL;
